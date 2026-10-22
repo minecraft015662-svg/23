@@ -217,24 +217,104 @@ pick_remove() {
   for a in $names; do ( cmd_addon_remove "$a" ) || echo "${R}Failed: $a${O}"; done
 }
 
-menu() {
+box_title() { # $1 = text (ASCII), centered in a 58 wide box
+  local t="$1" w=58 l r bar
+  l=$(( (w - ${#t}) / 2 )); r=$(( w - ${#t} - l ))
+  bar=$(printf '═%.0s' $(seq "$w"))
+  printf ' ╔%s╗\n ║%*s%s%*s║\n ╚%s╝\n' "$bar" "$l" '' "$t" "$r" '' "$bar"
+}
+pause() { ask 'Press Enter to continue...' >/dev/null; }
+theme_installed() { [ -f "$PANEL_DIR/public/geeken/config.json" ]; }
+
+addons_hub() {
+  ensure_cmd curl; ensure_cmd jq; load_conf
+  curl -fsS "$BASE_URL/api/v1/addons" > "$WORK/reg.json" || { echo "${R}Can't reach the license server${O}"; pause; return 0; }
+  local NAMES=() i n
+  mapfile -t NAMES < <(jq -r '.[].name' "$WORK/reg.json")
+  [ "${#NAMES[@]}" -gt 0 ] || { echo "${R}No addons are available on the server${O}"; pause; return 0; }
+  local -A SEL=() INST=()
+  local MSG="" in t r c idx nm dot total=${#NAMES[@]} rows=$(( (${#NAMES[@]} + 1) / 2 ))
   while true; do
-    echo; echo "${G}Geeken theme manager${O}"
-    echo " 1) Install / update theme    5) Install an addon"
-    echo " 2) Uninstall theme           6) Remove an addon"
-    echo " 3) Set name and logo         7) Install ALL addons"
-    echo " 4) List addons               8) Rebuild panel assets"
-    echo " 9) Exit"
-    case "$(ask 'Choose [1-9]: ')" in
-      1) ( cmd_install ) ;;
-      2) ( cmd_uninstall ) ;;
-      3) ( cmd_brand "$(ask 'Hosting name: ')" "$(ask 'Logo file path (empty to skip): ')" ) ;;
-      4) ( cmd_addon_list ) ;;
-      5) ( pick_addons ) ;;
-      6) ( pick_remove ) ;;
-      7) ( cmd_addon_all ) ;;
-      8) ( need_root; load_conf; build_panel ) ;;
-      9) exit 0 ;;
+    INST=(); if [ -f "$ADDON_DIR/installed.list" ]; then while read -r n; do [ -n "$n" ] && INST[$n]=1; done < "$ADDON_DIR/installed.list"; fi
+    printf '\e[H\e[2J'
+    box_title "GEEKEN ADDONS HUB"
+    echo
+    for ((r = 0; r < rows; r++)); do
+      for c in 0 1; do
+        idx=$(( r * 2 + c )); [ "$idx" -lt "$total" ] || continue
+        n="${NAMES[$idx]}"; printf -v nm '%-24s' "$n"
+        if [ -n "${INST[$n]:-}" ]; then dot="${G}●${O}"; else dot="${D}○${O}"; fi
+        if [ -n "${SEL[$n]:-}" ]; then printf '  \e[7m%3d %s\e[0m %s ' "$((idx + 1))" "$nm" "$dot"
+        else printf '  %3d %s %s ' "$((idx + 1))" "$nm" "$dot"; fi
+      done
+      echo
+    done
+    echo " ──────────────────────────────────────────────────────────"
+    echo " SELECTED: ${#SEL[@]} items    ${G}●${O} installed   ${D}○${O} not installed"
+    echo " [i] Install  [r] Remove  [a] Select All  [c] Clear  [0] Back"
+    echo " ──────────────────────────────────────────────────────────"
+    [ -n "$MSG" ] && { echo " $MSG"; MSG=""; }
+    in=$(ask ' ➤ Type numbers to select (example: 1 5 12), or a command: ')
+    in="${in,,}"; in=${in//,/ }
+    case "$in" in
+      0) return 0 ;;
+      a|all) for n in "${NAMES[@]}"; do SEL[$n]=1; done ;;
+      c|clear) SEL=() ;;
+      i|r)
+        local list=(); for n in "${NAMES[@]}"; do [ -n "${SEL[$n]:-}" ] && list+=("$n"); done
+        if [ "${#list[@]}" -eq 0 ]; then MSG="${R}Nothing selected.${O} Type the numbers first, then press i or r."; continue; fi
+        printf '\e[H\e[2J'
+        for n in "${list[@]}"; do
+          if [ "$in" = "i" ]; then echo "${G}==>${O} Installing $n"; ( cmd_addon_install "$n" ) || echo "${R}Failed: $n${O}"
+          elif [ -n "${INST[$n]:-}" ]; then echo "${G}==>${O} Removing $n"; ( cmd_addon_remove "$n" ) || echo "${R}Failed: $n${O}"
+          else echo "${D}Skipping $n (not installed)${O}"; fi
+        done
+        SEL=(); echo; pause ;;
+      *)
+        for t in $in; do
+          if [[ "$t" =~ ^[0-9]+$ ]] && [ "$t" -ge 1 ] && [ "$t" -le "$total" ]; then
+            n="${NAMES[$((t - 1))]}"
+            if [ -n "${SEL[$n]:-}" ]; then unset "SEL[$n]"; else SEL[$n]=1; fi
+          else MSG="${R}Unknown input: $t${O}"; fi
+        done ;;
+    esac
+  done
+}
+
+menu() {
+  load_conf
+  local ch ts cnt
+  while true; do
+    printf '\e[H\e[2J'
+    box_title "GEEKEN CONTROL PANEL"
+    if theme_installed; then ts="${G}● INSTALLED${O}"; else ts="${D}○ NOT INSTALLED${O}"; fi
+    cnt=$(grep -c . "$ADDON_DIR/installed.list" 2>/dev/null); cnt=${cnt:-0}
+    echo
+    echo "   Theme status : $ts"
+    echo "   Addons       : $cnt installed"
+    echo
+    echo "   [1] Theme      install, update, uninstall"
+    echo "   [2] Addons     pick and install extensions"
+    echo "   [3] Branding   hosting name, logo, color"
+    echo "   [4] Rebuild    rebuild panel assets"
+    echo
+    echo "   [0] Exit"
+    echo
+    ch=$(ask '   ➤ Select Option : ')
+    case "$ch" in
+      1) echo; echo "   [1] Install / update   [2] Uninstall   [0] Back"
+         case "$(ask '   ➤ Select Option : ')" in
+           1) ( cmd_install ); pause ;;
+           2) ( cmd_uninstall ); pause ;;
+         esac ;;
+      2) addons_hub ;;
+      3) echo; echo "   [1] Hosting name and logo   [2] Accent color   [0] Back"
+         case "$(ask '   ➤ Select Option : ')" in
+           1) ( cmd_brand "$(ask '   Hosting name: ')" "$(ask '   Logo file path (empty to skip): ')" ); pause ;;
+           2) ( cmd_color "$(ask '   Color (example #1d9e75): ')" ); pause ;;
+         esac ;;
+      4) ( need_root; load_conf; build_panel ); pause ;;
+      0) printf '\e[H\e[2J'; exit 0 ;;
     esac
   done
 }
@@ -249,8 +329,8 @@ case "${1:-menu}" in
   addon)
     case "${2:-}" in
       list) cmd_addon_list ;;
-      install) if [ -n "${3:-}" ]; then cmd_addon_install "$3"; else pick_addons; fi ;;
-      remove) if [ -n "${3:-}" ]; then cmd_addon_remove "$3"; else pick_remove; fi ;;
+      install) if [ -n "${3:-}" ]; then cmd_addon_install "$3"; else addons_hub; fi ;;
+      remove) if [ -n "${3:-}" ]; then cmd_addon_remove "$3"; else addons_hub; fi ;;
       install-all) cmd_addon_all ;;
       *) echo "Usage: geeken addon {list|install <name>|remove <name>|install-all}" ;;
     esac ;;

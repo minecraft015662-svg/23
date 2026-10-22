@@ -1,6 +1,12 @@
 // Two backends, same API:
+//  - UPSTASH_REDIS_REST_URL + _TOKEN set -> Upstash Redis (see db-redis.js)
 //  - DATABASE_URL set  -> PostgreSQL (use this on Render free: Neon, Supabase, Render Postgres...)
 //  - otherwise         -> local SQLite file (DB_PATH or server/geeken.db)
+if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) {
+  module.exports = require('./db-redis'); // Upstash Redis
+  return;
+}
+
 const crypto = require('crypto');
 const path = require('path');
 

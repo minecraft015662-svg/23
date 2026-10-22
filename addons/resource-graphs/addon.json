@@ -1,0 +1,1 @@
+{ "name": "resource-graphs", "title": "Resource graphs", "version": "0.1.0", "description": "Live CPU, RAM, disk and network charts.", "rebuild": false }

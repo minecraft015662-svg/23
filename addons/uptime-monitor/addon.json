@@ -1,0 +1,1 @@
+{ "name": "uptime-monitor", "title": "Uptime monitor", "version": "0.1.0", "description": "Uptime history and status for each server.", "rebuild": false }

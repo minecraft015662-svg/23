@@ -1,0 +1,1 @@
+{ "name": "json-config-editor", "title": "JSON config editor", "version": "0.1.0", "description": "Edit JSON and YAML server configs with validation.", "rebuild": false }

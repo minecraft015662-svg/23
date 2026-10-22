@@ -1,0 +1,1 @@
+{ "name": "quick-actions", "title": "Quick actions", "version": "0.1.0", "description": "Start, stop, restart and kill from the server list.", "rebuild": false }

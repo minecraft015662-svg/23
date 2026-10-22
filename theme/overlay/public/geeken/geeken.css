@@ -1,0 +1,6 @@
+/* Geeken starter styles. Edit freely, then re-run: bash tools/build-release.sh */
+:root { --geeken-accent: #6c63ff; --geeken-bg: #0f1220; --geeken-surface: #171a2e; --geeken-line: #2a2f55; }
+body { background: var(--geeken-bg) !important; }
+#NavigationBar { background: var(--geeken-surface) !important; border-bottom: 1px solid var(--geeken-line); box-shadow: none !important; }
+#NavigationBar a:hover { color: var(--geeken-accent) !important; }
+::selection { background: var(--geeken-accent); color: #fff; }

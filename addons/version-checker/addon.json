@@ -1,0 +1,1 @@
+{ "name": "version-checker", "title": "Version checker", "version": "0.1.0", "description": "Tells you when a new Geeken version is out.", "rebuild": false }

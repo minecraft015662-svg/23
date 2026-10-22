@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Geeken theme</title>
+<style>
+:root{--bg:#0f1220;--card:#171a2e;--line:#2a2f55;--text:#e8e9f3;--muted:#8a8fb5;--accent:#6c63ff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.6 system-ui,sans-serif}
+main{max-width:760px;margin:0 auto;padding:48px 20px}
+h1{font-size:2rem;line-height:1.2;margin:0 0 8px}p{color:var(--muted)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin:28px 0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px}
+.card.best{border:2px solid var(--accent)}
+.card h2{font-size:1.1rem;margin:0 0 4px}ul{padding-left:18px;color:#c9cbe6}
+code{display:block;background:#080a14;color:#7ee0b0;border-radius:8px;padding:12px;overflow-x:auto;font-size:14px}
+a{color:#a9a3ff}
+</style></head><body><main>
+<h1>Geeken, a theme for your hosting panel</h1>
+<p>Your hosting name and logo, a live color editor, and addons you can add one command at a time.</p>
+<div class="grid">
+  <div class="card"><h2>Theme license</h2><p>The Geeken theme and branding tools.</p><ul><li>Theme install</li><li>Name, logo and colors</li><li>Updates</li></ul></div>
+  <div class="card best"><h2>Theme + addon license</h2><p>Everything in the theme license, plus addons.</p><ul><li>Everything in theme</li><li>All addons, A to Z</li><li>Priority support</li></ul></div>
+</div>
+<p>Already have a license? Run this on your panel server as root:</p>
+<code id="cmd">bash &lt;(curl -s <span id="u"></span>/install.sh)</code>
+<p style="margin-top:32px"><a href="/admin.html">Admin login</a></p>
+</main><script>document.getElementById('u').textContent=location.origin;</script></body></html>

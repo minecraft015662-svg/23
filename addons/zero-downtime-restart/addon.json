@@ -1,0 +1,1 @@
+{ "name": "zero-downtime-restart", "title": "Zero downtime restart", "version": "0.1.0", "description": "Safer restarts with pre-checks and rollback.", "rebuild": false }

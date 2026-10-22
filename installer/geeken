@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+# Geeken CLI: theme + addon manager for Pterodactyl
+set -uo pipefail
+BASE_URL="__BASE_URL__"
+CONF_DIR=/etc/geeken
+CONF=$CONF_DIR/config
+BACKUP_DIR=/var/backups/geeken
+ADDON_DIR=/var/lib/geeken/addons
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+
+G=$'\e[32m'; R=$'\e[31m'; D=$'\e[2m'; O=$'\e[0m'
+say() { echo "${G}==>${O} $*"; }
+die() { echo "${R}Error:${O} $*" >&2; exit 1; }
+need_root() { [ "$(id -u)" -eq 0 ] || die "Run as root (sudo geeken ...)"; }
+ask() { local v; read -r -p "$1" v </dev/tty; echo "$v"; }
+
+PANEL_DIR=/var/www/pterodactyl
+LICENSE_KEY=""
+load_conf() { [ -f "$CONF" ] && . "$CONF"; return 0; }
+save_conf() {
+  mkdir -p "$CONF_DIR"; umask 077
+  printf 'PANEL_DIR=%q\nLICENSE_KEY=%q\n' "$PANEL_DIR" "$LICENSE_KEY" > "$CONF"
+}
+ensure_cmd() {
+  command -v "$1" >/dev/null && return 0
+  if command -v apt-get >/dev/null; then say "Installing $1..."; apt-get install -y "$1" >/dev/null || die "Could not install $1"
+  else die "$1 is required. Install it and run again."; fi
+}
+ensure_setup() {
+  ensure_cmd curl; ensure_cmd tar; ensure_cmd jq
+  load_conf
+  if [ ! -f "$PANEL_DIR/artisan" ]; then
+    PANEL_DIR=$(ask "Panel directory [/var/www/pterodactyl]: "); PANEL_DIR=${PANEL_DIR:-/var/www/pterodactyl}
+  fi
+  [ -f "$PANEL_DIR/artisan" ] || die "Pterodactyl was not found in $PANEL_DIR"
+  if [ -z "$LICENSE_KEY" ]; then LICENSE_KEY=$(ask "License key (GKN-XXXX-XXXX-XXXX-XXXX): "); fi
+  [ -n "$LICENSE_KEY" ] || die "A license key is required"
+  save_conf
+  DOMAIN=$(grep -E '^APP_URL=' "$PANEL_DIR/.env" | head -1 | cut -d= -f2- | tr -d "\"' ")
+  DOMAIN=${DOMAIN#*://}; DOMAIN=${DOMAIN%%/*}; DOMAIN=${DOMAIN,,}
+  [ -n "$DOMAIN" ] || die "APP_URL is missing in $PANEL_DIR/.env"
+}
+verify() { # $1 = theme | addon
+  local out
+  out=$(curl -sS -X POST "$BASE_URL/api/v1/verify" -H 'Content-Type: application/json' \
+    -d "$(jq -n --arg k "$LICENSE_KEY" --arg d "$DOMAIN" --arg p "$1" '{key:$k,domain:$d,product:$p}')") \
+    || die "Can't reach the license server"
+  [ "$(echo "$out" | jq -r '.valid')" = "true" ] || die "$(echo "$out" | jq -r '.error // "License check failed"')"
+  say "License OK for $DOMAIN"
+}
+download() { # $1 = url path, $2 = output file
+  curl -fsS -H "X-License-Key: $LICENSE_KEY" -H "X-Domain: $DOMAIN" -o "$2" "$BASE_URL$1" \
+    || die "Download failed. Check your license and that the release exists on the server."
+}
+fix_owner() { local o; o=$(stat -c '%U:%G' "$PANEL_DIR/artisan"); chown -R "$o" "$PANEL_DIR/public/geeken" 2>/dev/null || true; }
+inject_head() {
+  local f="$PANEL_DIR/resources/views/templates/wrapper.blade.php"
+  [ -f "$f" ] || die "wrapper.blade.php not found. This panel version is not supported yet."
+  grep -q 'geeken/geeken.css' "$f" && return 0
+  sed -i 's#</head>#    <link rel="stylesheet" href="/geeken/geeken.css">\n    <script defer src="/geeken/geeken.js"></script>\n</head>#' "$f"
+}
+build_panel() {
+  command -v yarn >/dev/null || die "yarn is required to rebuild the panel (npm i -g yarn)"
+  command -v node >/dev/null || die "node is required to rebuild the panel"
+  say "Rebuilding panel assets (this takes a few minutes)..."
+  ( cd "$PANEL_DIR" && export NODE_OPTIONS=--openssl-legacy-provider && yarn install && yarn build:production ) || die "Build failed"
+  ( cd "$PANEL_DIR" && php artisan view:clear && php artisan config:clear ) >/dev/null 2>&1 || true
+}
+
+cmd_install() {
+  need_root; ensure_setup; verify theme
+  mkdir -p "$BACKUP_DIR"
+  local b="$BACKUP_DIR/panel-$(date +%Y%m%d-%H%M%S).tar.gz"
+  say "Backing up current panel files to $b"
+  tar -czf "$b" -C "$PANEL_DIR" resources public || die "Backup failed"
+  [ -f "$CONF_DIR/original_backup" ] || echo "$b" > "$CONF_DIR/original_backup"
+  say "Downloading theme..."
+  download /api/v1/download/theme "$WORK/theme.tar.gz"
+  # keep existing branding/addon settings on update
+  local keep=""; [ -f "$PANEL_DIR/public/geeken/config.json" ] && { keep="$WORK/config.json"; cp "$PANEL_DIR/public/geeken/config.json" "$keep"; }
+  tar -xzf "$WORK/theme.tar.gz" -C "$PANEL_DIR" || die "Extract failed"
+  [ -n "$keep" ] && cp "$keep" "$PANEL_DIR/public/geeken/config.json"
+  inject_head; fix_owner
+  say "Geeken theme installed. Set your name and logo with: geeken brand \"My Hosting\" /path/logo.png"
+}
+cmd_uninstall() {
+  need_root; load_conf
+  [ -f "$CONF_DIR/original_backup" ] || die "No backup found, nothing to restore"
+  local b; b=$(cat "$CONF_DIR/original_backup"); [ -f "$b" ] || die "Backup file is missing: $b"
+  [ "$(ask 'Remove Geeken and restore the original panel files? (y/N): ')" = "y" ] || exit 0
+  tar -xzf "$b" -C "$PANEL_DIR" || die "Restore failed"
+  rm -rf "$PANEL_DIR/public/geeken" "$ADDON_DIR" "$CONF_DIR/original_backup"
+  say "Geeken removed. Run 'geeken build' if the panel assets need rebuilding."
+}
+cmd_brand() {
+  need_root; load_conf
+  local name="${1:-}" logo="${2:-}" d="$PANEL_DIR/public/geeken"
+  [ -n "$name" ] || die 'Usage: geeken brand "Hosting Name" [/path/to/logo.png]'
+  [ -f "$d/config.json" ] || die "Install the theme first"
+  local logo_url; logo_url=$(jq -r '.logo // ""' "$d/config.json")
+  if [ -n "$logo" ]; then
+    [ -f "$logo" ] || die "Logo file not found: $logo"
+    case "${logo##*.}" in png|jpg|jpeg|svg|webp|gif) ;; *) die "Logo must be png, jpg, svg, webp or gif";; esac
+    cp "$logo" "$d/logo.${logo##*.}"; logo_url="/geeken/logo.${logo##*.}"
+  fi
+  local tmp="$WORK/c.json"
+  jq --arg n "$name" --arg l "$logo_url" '.name=$n | .logo=$l' "$d/config.json" > "$tmp" && cat "$tmp" > "$d/config.json"
+  fix_owner; say "Branding saved. Hard refresh your panel (Ctrl+Shift+R)."
+}
+cmd_color() {
+  need_root; load_conf
+  local c="${1:-}" f="$PANEL_DIR/public/geeken/config.json"
+  [[ "$c" =~ ^#[0-9a-fA-F]{6}$ ]] || die "Usage: geeken color #6c63ff"
+  [ -f "$f" ] || die "Install the theme first"
+  jq --arg c "$c" '.accent=$c' "$f" > "$WORK/c.json" && cat "$WORK/c.json" > "$f"
+  say "Accent color set to $c"
+}
+
+addon_enable() { # $1 = addon name (already extracted to $ADDON_DIR/$1)
+  local n="$1" src="$ADDON_DIR/$1" cfg="$PANEL_DIR/public/geeken/config.json"
+  [ -f "$cfg" ] || die "Install the theme first"
+  mkdir -p "$PANEL_DIR/public/geeken/addons/$n"
+  [ -f "$src/addon.js" ] && cp "$src/addon.js" "$PANEL_DIR/public/geeken/addons/$n/addon.js"
+  jq --arg n "$n" '.addons = ((.addons // []) + [$n] | unique)' "$cfg" > "$WORK/c.json" && cat "$WORK/c.json" > "$cfg"
+  # optional hook for addons that need extra backend work
+  if [ -f "$src/install.sh" ]; then ( cd "$src" && PANEL_DIR="$PANEL_DIR" bash ./install.sh ) || die "Addon install script failed"; fi
+}
+addon_disable() { # $1 = addon name
+  local n="$1" src="$ADDON_DIR/$1" cfg="$PANEL_DIR/public/geeken/config.json"
+  if [ -f "$src/uninstall.sh" ]; then ( cd "$src" && PANEL_DIR="$PANEL_DIR" bash ./uninstall.sh ) || true; fi
+  rm -rf "$PANEL_DIR/public/geeken/addons/$n"
+  if [ -f "$cfg" ]; then
+    jq --arg n "$n" '.addons = ((.addons // []) - [$n])' "$cfg" > "$WORK/c.json" && cat "$WORK/c.json" > "$cfg"
+  fi
+}
+
+cmd_addon_list() {
+  ensure_cmd curl; ensure_cmd jq
+  local list; curl -fsS "$BASE_URL/api/v1/addons" > "$WORK/reg.json" || die "Can't reach the license server"
+  jq -r '.[] | [.name, .version, .description] | @tsv' "$WORK/reg.json" | while IFS=$'\t' read -r n v d; do
+    local m=" "; grep -qx "$n" "$ADDON_DIR/installed.list" 2>/dev/null && m="*"
+    printf '%s %-22s %-7s %s\n' "$m" "$n" "$v" "$d"
+  done
+  echo "${D}(* = installed)${O}"
+}
+cmd_addon_install() {
+  local n="${1:-}"
+  [[ "$n" =~ ^[a-z0-9-]{1,40}$ ]] || die "Usage: geeken addon install <name>"
+  need_root; ensure_setup; verify addon
+  download "/api/v1/download/addon/$n" "$WORK/a.tar.gz"
+  rm -rf "${ADDON_DIR:?}/$n"; mkdir -p "$ADDON_DIR/$n"
+  tar -xzf "$WORK/a.tar.gz" -C "$ADDON_DIR/$n" || die "Extract failed"
+  addon_enable "$n"
+  grep -qx "$n" "$ADDON_DIR/installed.list" 2>/dev/null || echo "$n" >> "$ADDON_DIR/installed.list"
+  if [ "$(jq -r '.rebuild // false' "$ADDON_DIR/$n/addon.json")" = "true" ]; then build_panel; fi
+  fix_owner; say "Addon '$n' installed"
+}
+cmd_addon_remove() {
+  local n="${1:-}"
+  [[ "$n" =~ ^[a-z0-9-]{1,40}$ ]] || die "Usage: geeken addon remove <name>"
+  need_root; load_conf
+  [ -d "$ADDON_DIR/$n" ] || die "Addon '$n' is not installed"
+  addon_disable "$n"
+  rm -rf "${ADDON_DIR:?}/$n"
+  grep -vx "$n" "$ADDON_DIR/installed.list" > "$WORK/l" 2>/dev/null; cat "$WORK/l" > "$ADDON_DIR/installed.list" 2>/dev/null || true
+  say "Addon '$n' removed"
+}
+cmd_addon_all() {
+  need_root; ensure_setup; verify addon
+  curl -fsS "$BASE_URL/api/v1/addons" | jq -r '.[].name' | while read -r n; do cmd_addon_install "$n" || true; done
+}
+
+menu() {
+  while true; do
+    echo; echo "${G}Geeken theme manager${O}"
+    echo " 1) Install / update theme    5) Install an addon"
+    echo " 2) Uninstall theme           6) Remove an addon"
+    echo " 3) Set name and logo         7) Install ALL addons"
+    echo " 4) List addons               8) Rebuild panel assets"
+    echo " 9) Exit"
+    case "$(ask 'Choose [1-9]: ')" in
+      1) ( cmd_install ) ;;
+      2) ( cmd_uninstall ) ;;
+      3) ( cmd_brand "$(ask 'Hosting name: ')" "$(ask 'Logo file path (empty to skip): ')" ) ;;
+      4) ( cmd_addon_list ) ;;
+      5) ( cmd_addon_install "$(ask 'Addon name: ')" ) ;;
+      6) ( cmd_addon_remove "$(ask 'Addon name: ')" ) ;;
+      7) ( cmd_addon_all ) ;;
+      8) ( need_root; load_conf; build_panel ) ;;
+      9) exit 0 ;;
+    esac
+  done
+}
+
+case "${1:-menu}" in
+  menu) menu ;;
+  install|update) cmd_install ;;
+  uninstall) cmd_uninstall ;;
+  brand) shift; cmd_brand "$@" ;;
+  color) shift; cmd_color "$@" ;;
+  build) need_root; load_conf; build_panel ;;
+  addon)
+    case "${2:-}" in
+      list) cmd_addon_list ;;
+      install) cmd_addon_install "${3:-}" ;;
+      remove) cmd_addon_remove "${3:-}" ;;
+      install-all) cmd_addon_all ;;
+      *) echo "Usage: geeken addon {list|install <name>|remove <name>|install-all}" ;;
+    esac ;;
+  *) echo "Usage: geeken [menu|install|update|uninstall|brand|color|build|addon]" ;;
+esac

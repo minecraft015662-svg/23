@@ -1,0 +1,1 @@
+{ "name": "plugin-installer", "title": "Plugin installer", "version": "0.1.0", "description": "Install game plugins and mods from the panel.", "rebuild": false }

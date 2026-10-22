@@ -29,7 +29,7 @@ Open `https://your-domain/admin.html` to create licenses, email them, revoke the
 1. Push this repo to GitHub (private).
 2. Render dashboard, **New**, **Web Service**, connect the repo. Leave **Root Directory** empty.
 3. Runtime **Node**. Build command: `cd server && npm install && npm run release`. Start command: `cd server && npm start`.
-4. **Database**: either set `DATABASE_URL` to a free external Postgres (Neon, Supabase and similar; recommended on the free plan, data survives restarts), or use a paid instance type with a **Disk** mounted at `/var/data` and `DB_PATH=/var/data/geeken.db`. Never use SQLite without a Disk on the free type, its files are deleted on every deploy and restart.
+4. **Database**: either set `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` (Upstash Redis), or set `DATABASE_URL` to a free external Postgres (Neon, Supabase and similar; recommended on the free plan, data survives restarts), or use a paid instance type with a **Disk** mounted at `/var/data` and `DB_PATH=/var/data/geeken.db`. Never use SQLite without a Disk on the free type, its files are deleted on every deploy and restart.
 5. **Environment** variables: `BASE_URL` (your Render or custom domain URL, no trailing slash), `ADMIN_USER`, `ADMIN_PASS`, `SESSION_SECRET` (long random string), `DATABASE_URL` (or `DB_PATH`), `BRAND_NAME`, and the SMTP variables.
 6. Deploy, then open `https://your-service.onrender.com/admin.html`.
 
@@ -46,7 +46,8 @@ geeken install                         # install or update the theme
 geeken brand "My Hosting" ./logo.png   # your hosting name and logo
 geeken color "#1d9e75"                 # accent color
 geeken addon list
-geeken addon install ticket-system
+geeken addon install            # shows the full list and lets you pick
+geeken addon install ticket-system   # or install one by name
 geeken addon install-all
 geeken addon remove ticket-system
 geeken uninstall                       # restores the original panel files
